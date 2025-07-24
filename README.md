@@ -60,7 +60,7 @@ In order for the file to be successfuly extracted it has to use the right:
 
 *enter encryption and embedding passwords...*
 
-*output **stego.png** (default) will be created...*
+*output **stego.jpg** (default) will be created...*
 
 **The default YCbCr color channel for embedding and extracting is Y** (luminance component) with the highest offered embedding capacity (due to how the JPEG works), which does not have to be set directly.
 
