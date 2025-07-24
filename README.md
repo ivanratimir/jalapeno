@@ -66,7 +66,7 @@ In order for the file to be successfuly extracted it has to use the right:
 
 **Extraction example:**
 
-```python jalapeno.py extract -si stego.png -k 4 -ch 1```
+```python jalapeno.py extract -si stego.jpg -k 4 -ch 1```
 
 *enter encryption and embedding passwords...*
 
