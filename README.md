@@ -1,10 +1,6 @@
 # jalapeno
 
-Steganography scripts for embedding and extracting secret message files within the quantized DCT coefficients of JPEG compressed images.
-
-# jalapeno
-
-Applied steganography scripts to embed and extract secret message files within JPEG compressed image quantized DCT coefficients, developed as a part of an image and signal processing course project and thesis. **This is a continutation of the [piquillo ](https://codeberg.org/ijuranovic/piquillo) script, developed with the same functional flow - but for steganography in the DCT (frequency) domain.**
+Steganography scripts for embedding and extracting secret message files within the quantized DCT coefficients of JPEG compressed images, developed as a part of an image and signal processing course project and thesis. **This is a continutation of the [piquillo ](https://codeberg.org/ijuranovic/piquillo) script, developed with the same functional flow - but for steganography in the DCT (frequency) domain.**
 
 ## Disclaimer
 
