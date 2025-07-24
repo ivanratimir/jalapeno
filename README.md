@@ -18,7 +18,7 @@ This software is provided for educational and research purposes only. The author
 
 ## Requirements
 
-In addition to packages used for the piquillo (`pillow` and `numpy` packages for image processing, `pycryptodome` for cryptographic operations), the script relies on [Daniel Lerch's `jpeg-toolbox`](https://github.com/daniellerch/python-jpeg-toolbox) for low level reading, modifying and saving JPEG quantized DCT coefficients.. These packages are listed in `requirements.txt`, which can be installed in a python virtual environment. For example, to setup an environment on Linux based systems run the following command in a terminal:
+In addition to packages used for the piquillo (`pillow` and `numpy` packages for image processing, `pycryptodome` for cryptographic operations), the script relies on [Daniel Lerch's `python-jpeg-toolbox`](https://github.com/daniellerch/python-jpeg-toolbox) for low level reading, modifying and saving JPEG quantized DCT coefficients.. These packages are listed in `requirements.txt`, which can be installed in a python virtual environment. For example, to setup an environment on Linux based systems run the following command in a terminal:
 
 `python3 -m venv .venv`
 
