@@ -1,275 +1,357 @@
-import sys
 import argparse
+import textwrap
+import sys
+import os
+import jpeglib
 import numpy as np
-import jpeg_toolbox as jt
+from getpass import getpass
 from Crypto.Hash import HMAC, SHA256
-from utils.image_utils import *
-from utils.file_processing_utils import *
-from utils.syndrome_utils import calculate_points_dir, calculate_points_inv
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
 
 
 def main():
 
-    parser = argparse.ArgumentParser(description="jalapeno: JPEG steganography in the DCT domain")
+    parser = argparse.ArgumentParser(description="... for JPEG steganography")
     subparsers = parser.add_subparsers(dest="task")
                      
-    info = subparsers.add_parser('info', help='prints image capacity')
-    info.add_argument('-ci', type=str, help='cover image path', required=True)
-    info.add_argument('-k', type=int, help='binary block size', default=1)
-    info.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
+    pcheck = subparsers.add_parser('check', help='check cover capacity')
+    pcheck.add_argument('-ci', type=str, help='cover image path', required=True)
+    pcheck.add_argument('-k', type=int, help='binary block size', choices=range(1,9), default=1)
+    pcheck.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
         
-    embed = subparsers.add_parser('embed', help='embed a secret file')
-    embed.add_argument('-sf', type=str, help='secret file path', required=True)
-    embed.add_argument('-ci', type=str, help='cover image path', required=True)
-    embed.add_argument('-k', type=int, help='binary block size', default=1)
-    embed.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
+    pembed = subparsers.add_parser('embed', help='embed file data')
+    pembed.add_argument('-mf', type=str, help='embed file path', required=True)
+    pembed.add_argument('-ci', type=str, help='cover image path', required=True)
+    pembed.add_argument('-k', type=int, help='binary block size', choices=range(1,9), default=1)
+    pembed.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
 
-    extract = subparsers.add_parser('extract', help='extract a secret file')
-    extract.add_argument('-si', type=str, help='stego image path', required=True)
-    extract.add_argument('-k', type=int, help='binary block size', default=1)
-    extract.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
+    pextract = subparsers.add_parser('extract', help='extract file data')
+    pextract.add_argument('-si', type=str, help='stego image path', required=True)
+    pextract.add_argument('-k', type=int, help='binary block size', choices=range(1,9), default=1)
+    pextract.add_argument('-ch', type=int, help='YCbCr channel', choices=[0,1,2], default=0)
 
     args = parser.parse_args()
 
-
+    chs = ["Y", "Cb", "Cr"]
+    
     match args.task:
 
-        case 'info':
-
-            k = np.abs(args.k)
-            ch = args.ch
-            im_path = args.ci
-            im_type = get_im_type(im_path)
-
-            if im_type in types["lossles"]:
-
-                q = quality_prompt()
-                im_path = convert_to_jpeg(im_path, q)
-                im_type = "JPG"
-
-            if im_type not in types["lossy"]:
-
-                print("unsupported cover")
-                sys.exit(1)
-
-            # load cover DCT coefficients
-            im = jt.load(im_path)
-            c_cfs = im["coef_arrays"][ch]
-            c_cfs1 = c_cfs.flatten()
-
-            # embedding conditions
-            cond0 = (c_cfs1 != 0)
-            cond1 = (c_cfs1 != 1)
-            ids_arr0 = np.where(cond0 & cond1)[0]
-            n_pts = len(ids_arr0)
-
-            if k == 1:
-                byte_cap = n_pts // 8
+        case 'check':
             
-            else:
-                b_len = 2 ** k
-                # cap in n of blocks
-                n_b = n_pts // b_len
-                byte_cap = k*n_b // 8
+            k = args.k
+            ch = args.ch
 
-            print(f"\ncover -capacity: {byte_cap} B\n")
+            cover = jpeglib.read_dct(args.ci)
+            c_arr = getattr(cover, chs[ch])
+            c_arr1 = c_arr.flatten()
 
-    
+            # filtering embedding condition
+            ids = np.arange(len(c_arr1))
+            mask = (ids % 64 != 0) & ~(c_arr1 == 0)
+            ids = ids[mask]
+            
+            byte_cap = len(ids) // 8
+            
+            n = 2**k - 1 # block length
+
+            # capacity in n of blocks
+            n_blocks = len(c_arr1) // n
+            byte_cap = n_blocks * k // 8
+            
+            print(f"cover capacity: {byte_cap} B")
+
         case 'embed':
 
-            sf_path = args.sf
-            im_path = args.ci
+            fpath = args.mf
+            fname = os.path.basename(fpath).encode()
+            k = args.k
             ch = args.ch
-            k = np.abs(args.k)
 
-            if not os.path.exists(sf_path):
-                print(f"error: {sf_path} doesn't exist!")
+            if not os.path.exists(fpath):
+                print(f"{fname} doesn't exist!")
+                print("exiting...")
+                sys.exit(1)
+            
+            with open(fpath, "rb") as f:
+                fdata = f.read()
+
+            pt2 = len(fname).to_bytes(1) + fname + fdata
+            pt1 = len(pt2).to_bytes(3)
+            plaintext = pt1 + pt2
+
+            # encryption password prompt and hashing
+            pw1 = getpass(prompt="password 1: ").encode()
+            h1 = SHA256.new(data=pw1)
+            key = h1.digest()
+            mac = HMAC.new(key, plaintext, SHA256).digest()
+            iv, ciphertext = encrypt(plaintext, key)
+
+            # arrange bytes and convert to 1s and 0s
+            mB1 = iv + ciphertext[:3]
+            mB2 = ciphertext[3:] + mac
+            mB = mB1 + mB2
+            mb = ''.join(f"{B:08b}" for B in mB)
+            mb = pad_wrap(mb, k)
+
+            # load cover image
+            cover = jpeglib.read_dct(args.ci)
+            c_arr = getattr(cover, chs[ch])
+            # convert to a 1-D array
+            c_arr1 = c_arr.flatten()
+
+            ids = np.arange(len(c_arr1))
+            # dct ids meeting embedding conditions
+            mask = (ids % 64 != 0) & ~(c_arr1 == 0)
+            ids = ids[mask]
+
+            # cover block length
+            n = 2**k - 1 
+            # capacity in num of blocks
+            n_blocks = len(ids) // n
+            if len(mb) > n_blocks:
+                print("not enough embedding capacity!")
+                print("quitting... QQ")
                 sys.exit(1)
 
-            im_type = get_im_type(im_path)
-
-            if im_type in types["lossles"]:
-
-                q = quality_prompt()
-                im_path = convert_to_jpeg(im_path, q)
-                im_type = "JPG"
-
-            if im_type not in types["lossy"]:
-
-                print("unsupported cover")
-                sys.exit(1)
-        
-            aes_passw = input("\nenter file encryption password: ")
-            p1_b, p2_b = process_file_to_binary(sf_path, k, aes_passw)
-
-            # k=1: n of bits (=embedding pts); k>1: n of bin blocks
-            n1_b = len(p1_b)
-            n2_b = len(p2_b)
-
-            # for LSB method
-            if k == 1:
-                n_pts1 = n1_b
-                n_pts2 = n2_b
-
-            # for syndrome coding method
-            else:
-                out = calculate_points_dir(k, n1_b, n2_b)
-                n_pts1 = out[0]
-                n_pts2 = out[1]
-                shape_ids1 = out[2]
-                shape_ids2 = out[3]
-
-            # load cover DCT coefficients
-            im = jt.load(im_path)
-            c_cfs = im["coef_arrays"][ch]
-            # flat cover coeffs array
-            c_cfs1 = c_cfs.flatten()
-
-            # embedding conditions
-            cond0 = (c_cfs1 != 0)
-            cond1 = (c_cfs1 != 1)
-            ids_arr0 = np.where(cond0 & cond1)[0]
-
-            if (n_pts1+n_pts2) > len(ids_arr0):
-                print("error: exceeded image embedding capacity")
-                sys.exit(1)
-
-            rng_passw = input("enter image embedding password: ")
-            key = hash_digest(rng_passw)
-            seed = int.from_bytes(key)
+            # embedding password prompt (for PRNG's seed)
+            pw2 = getpass(prompt="password 2: ").encode()
+            h2 = SHA256.new(data=pw2)
+            seed = int.from_bytes(h2.digest())
             rng = np.random.default_rng(seed)
 
-            # indices selection for p1_b and p2_b embedding
-            sel1 = rng.choice(ids_arr0, n_pts1, 0)
-            mask = ~np.isin(ids_arr0, sel1)
-            ids_arr1 = ids_arr0[mask]
-            sel2 = rng.choice(ids_arr1, n_pts2, 0)
+            # permutaded dct coefficient indices
+            ids = rng.permutation(ids)
+            
+            # 1-D stego array with embedded data
+            s_arr1 = embed(c_arr1, ids, mb, k)
+            shape = c_arr.shape
+            s_arr = s_arr1.reshape(shape)
 
-            # for syndrome coding method
-            if k > 1:
-                sel1 = np.reshape(sel1, shape_ids1)
-                sel2 = np.reshape(sel2, shape_ids2)
-
-            # flat stego coefficients array s_arr1
-            s_cfs1 = embed_dct(c_cfs1, sel1, p1_b, k)
-            s_cfs1 = embed_dct(c_cfs1, sel2, p2_b, k)
-
-            shape = im["coef_arrays"][ch].shape
-            s_cfs = s_cfs1.reshape(shape)
-            im["coef_arrays"][ch] = s_cfs
-
-            print("\nsaving stego image...")
-            jt.save(im, 'stego.jpg')
-    
-
+            stego = cover
+            setattr(stego, chs[ch], s_arr)
+            # saving output stego image
+            oname = input("output name: ")
+            print(f"saving as {oname}.jpg...")
+            stego.write_dct(oname+".jpg")
+            
         case 'extract':
 
-            k = np.abs(args.k)
+            k = args.k
             ch = args.ch
 
-            # load stego DCT coefficients
-            im = jt.load(args.si)
-            s_cfs = im["coef_arrays"][ch]
-            s_cfs1 = s_cfs.flatten()
+            # load stego image
+            stego = jpeglib.read_dct(args.si)
+            s_arr = getattr(stego, chs[ch])
+            # convert to a 1-D array
+            s_arr1 = s_arr.flatten()
 
-            # embedding conditions
-            cond0 = (s_cfs1 != 0)
-            cond1 = (s_cfs1 != 1)
-            ids_arr0 = np.where(cond0 & cond1)[0]
+            ids = np.arange(len(s_arr1))
+            # dct ids meeting embedding conditions
+            mask = (ids % 64 != 0) & ~(s_arr1 == 0)
+            ids = ids[mask]
 
-            rng_passw = input("enter image embedding password: ")
-            key = hash_digest(rng_passw)
-            seed = int.from_bytes(key)
+            # embedding password prompt (for PRNG's seed)
+            pw2 = getpass(prompt="password 2: ").encode()
+            h2 = SHA256.new(data=pw2)
+            seed = int.from_bytes(h2.digest())
             rng = np.random.default_rng(seed)
 
-            # part 1: 19 bytes = 16 B (iv) + 3 B (encrypted size)
-            # for LSB method
-            if k == 1:
-                n_pts1 = 19 * 8
-            # for syndrome coding method
+            # permutaded dct coefficient indices
+            ids = rng.permutation(ids)
+
+            n_blocks1 = np.ceil(19*8/k).astype(int)
+            n1 = n_blocks1 * (2**k - 1)
+
+            mb1 = extract(s_arr1, ids[:n1], k)
+            mB1 = bits_to_bytes(merge_unpad(mb1))
+
+            # nu: number of unpadded bits
+            nu = (len(mb1) % 8)
+            if nu > 0:
+                mb2 = mb1[-nu:]
             else:
-                n_pts1, shape_ids1 = calculate_points_inv(k, 19)
+                mb2 = []
+            
+            # separate iv for decryption
+            iv = mB1[:16]
 
-            # indices selection with embedded p1_b
-            sel1 = rng.choice(ids_arr0, n_pts1, 0)
+            # decryption password prompt and hashing
+            pw1 = getpass(prompt="password 1: ").encode()
+            h1 = SHA256.new(data=pw1)
+            key = h1.digest()
 
-            if k > 1:
-                sel1 = np.reshape(sel1, shape_ids1)
+            # ciphertext: 3 B of data for 2nd extraction
+            ciphertext = mB1[16:]
+            pt1 = decrypt(iv, ciphertext, key)
 
-            p1_b = extract_dct(s_cfs1, sel1, k)
-            p1_B = bits_to_bytes(merge_unpad(p1_b))
+            # n bytes 2 (fname_len + fname + fdata + MAC)
+            nB2 = int.from_bytes(pt1) + 32
+            n_blocks2 = np.ceil(nB2*8/k).astype(int)
+            n2 = n_blocks2 * (2**k - 1)
+            
+            mb2 += extract(s_arr1, ids[n1:n1+n2], k)
+            mB2 = bits_to_bytes(merge_unpad(mb2))[:nB2]
 
-            iv = p1_B[:16]
-        
-            aes_passw = input("enter file encryption password: ")
-            key = hash_digest(aes_passw)
-
-            ciphertext = p1_B[16:]
-            size = decrypt(iv, ciphertext, key)
-            size = int.from_bytes(size)
-
-            # part 2: excracted "size" number of B + 32 B (for mac)
-            if k == 1:
-                n_pts2 = (size+32) * 8
-            else:
-                n_pts2, shape_ids2 = calculate_points_inv(k, size+32)
-
-            if n_pts2 > (len(ids_arr0)-n_pts1):
-                print("error: extracted size exceeded capacity")
-                sys.exit(1)
-
-            # indices selection with embedded p2_b
-            mask = ~np.isin(ids_arr0, sel1)
-            ids_arr1 = ids_arr0[mask]
-            sel2 = rng.choice(ids_arr1, n_pts2, 0)
-
-            if k > 1:
-                sel2 = np.reshape(sel2, shape_ids2)
-
-            p2_b = extract_dct(s_cfs1, sel2, k)
-            p2_B = bits_to_bytes(merge_unpad(p2_b))
-
-            ciphertext += p2_B[:-32]
-            mac = p2_B[-32:]
-
-            print("")
+            ciphertext += mB2[:-32]
+            mac = mB2[-32:]
             plaintext = decrypt(iv, ciphertext, key)
+
+            h = HMAC.new(key, plaintext, SHA256)
+
             try:
-                HMAC.new(key, plaintext, SHA256).verify(mac)
+                h.verify(mac)
+                print("extracted bytes are authentic! \\o/")
 
-                data = plaintext[3:]
+                pt2 = plaintext[3:]
+                fname_len = pt2[0]
+                fname = pt2[1:1 + fname_len]
+                fdata = pt2[1 + fname_len: ]
 
-                f_name = data[1:1+data[0]].decode()
-                f_data = data[1+data[0]: ]
-        
-
-                print(f"saving exctracted {f_name} file...")
-                with open(f_name, "wb") as f:
+                print(f"writing extracted {fname} bytes...")
+                with open(fname, "wb") as f:
     
-                    f.write(f_data)
-            except:
-                print("error: plaintext failed authentication!")
-                sys.exit(1)
-                
+                    f.write(fdata)
 
+            except ValueError:
+                print("invalid MAC. the message was tampered with or the key is wrong!")
+                print("quitting... QQ")
+                sys.exit(1)
+            
         case _:
 
             parser.print_help()
 
 
-def quality_prompt():
+# ------------------------------------------ #
+# ------- IMAGE PROCESSING FUNCTIONS ------- #
+# ------------------------------------------ #
 
-    q = 0
-    print("cover image will be converted to a JPEG format!")
-    while not (0 < q <= 100):
-        q = int(input("input JPEG cover quality (0-100): "))
+
+# LSB +/-1 coefficient embedding
+def PM_1(c, c_min, c_max):
+
+    match c:
+        case -1:
+            c -= 1
+        case  1:
+            c += 1
+        case _ if c == c_min:
+            c += 1
+        case _ if c == c_max:
+            c -= 1
+        case _:
+            c += np.random.choice([-1, 1])
+
+    return c
+
+
+# S(y): determine syndrome of binary block y
+def S(y):
+    
+    s = 0
+    for i, b in enumerate(y):
+        if b:
+            s ^= i+1
             
-    return q
+    return s
+
+
+def embed(c_arr1, ids, m, k):
+
+    s_arr1 = c_arr1
+    
+    c_min = np.min(c_arr1)
+    c_max = np.max(c_arr1)
+
+    n = 2**k - 1 # block length
+
+    for i in range(len(m)):
+
+        # block of indices
+        block = ids[i*n : i*n + n]
+        # binary cover block
+        c = c_arr1[block] % 2
+        # error index
+        e = S(c) ^ int(m[i], 2)
+        if e > 0:
+
+            mod = block[e-1]
+            pv = c_arr1[mod]
+            pv1 = PM_1(pv, c_min, c_max)
+            s_arr1[mod] = pv1
+
+    return s_arr1
+
+
+def extract(s_arr1, ids, k):
+
+    n = 2**k - 1 # block length
+
+    m = []
+    for i in range(0, len(ids), n):
+
+        # block of indices
+        block = ids[i: i+n]
+        # binary stego block
+        s = s_arr1[block] % 2
+        m += bin(S(s))[2:].zfill(k)
+        
+    return m
+
+
+# ------------------------------------------ #
+# ------ MESSAGE PROCESSING FUNCTIONS ------ #
+# ------------------------------------------ #
+
+
+def bits_to_bytes(bits):
+
+    val = int(bits, 2)
+    n_B = len(bits) // 8
+
+    return val.to_bytes(n_B, byteorder="big")
+
+
+# zero pad and wrap to equal k length blocks
+def pad_wrap(bits, k):
+
+    mod = len(bits) % k
+    if mod != 0:
+        bits += "0" * (k-mod)
+    
+    return textwrap.wrap(bits, k)
+
+
+# merge binary blocks to string and unpad 0s
+def merge_unpad(bits):
+
+    bits = "".join(bits)
+    mod = len(bits) % 8
+
+    return bits[:len(bits) - mod]
+
+
+def encrypt(plaintext, key):
+
+    iv = get_random_bytes(16)
+    cipher = AES.new(key, AES.MODE_CFB, iv)
+    ciphertext = cipher.encrypt(plaintext)
+
+    return iv, ciphertext
+
+
+def decrypt(iv, ciphertext, key):
+
+    cipher = AES.new(key, AES.MODE_CFB, iv)
+    plaintext = cipher.decrypt(ciphertext)
+    
+    return plaintext
 
 
 if __name__ == '__main__':
 
-    welcome_ascii = r"""
+    hello = r"""
    _       _                                           
   (_) __ _| | __ _ _ __   ___ _ __   ___   _ __  _   _ 
   | |/ _` | |/ _` | '_ \ / _ \ '_ \ / _ \ | '_ \| | | |
@@ -278,7 +360,6 @@ if __name__ == '__main__':
 |__/              |_|                     |_|    |___/ 
 
         """
-    print(welcome_ascii)
+    print(hello)
 
     main()
-
