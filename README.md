@@ -6,6 +6,8 @@
 
 `jalapeno.py` is a **python script able to encrypt and embed, as well as extract and decrypt hidden messages (as files) in JPEG's quantized DCT coefficients.**
 
+This respository contains updated code developed for my graduate thesis project: [Steganografija u digitalnim slikama](https://www.unirepository.svkri.uniri.hr/object/riteh:5406)
+
 ## Disclaimer
 
 This software is provided for educational and research purposes only. The author is not responsible for any misuse of this software.
